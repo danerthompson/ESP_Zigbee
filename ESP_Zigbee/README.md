@@ -1,1 +1,1 @@
-Made by Dane Thompson
+Open source Zigbee multisensor code for ESP32 C6. More documentation coming soon!
