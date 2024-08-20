@@ -5,6 +5,9 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
+#include "esp_pm.h"
+#include "esp_private/esp_clk.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,7 +26,8 @@
 */
 
 #define PIR_GPIO GPIO_NUM_7
-#define SENSOR_UPDATE_PERIOD_SEC 300
+#define LED0_GPIO GPIO_NUM_15
+#define SENSOR_UPDATE_PERIOD_SEC 60
 
 adc_oneshot_unit_handle_t bat_adc_handle;
 adc_oneshot_unit_init_cfg_t bat_adc_init_config = {
@@ -37,6 +41,7 @@ adc_cali_handle_t bat_adc_cali_handle = NULL;
 
 uint8_t zb_started_flag = 0;            // Flag is set after Zigbee stack is initialized
 uint8_t first_sensor_sample_flag = 0;   // Flag is set after first sensor sample occurs (stops Zigbee from reporting 0s on restart)
+uint8_t hdc1080_done_flag = 0;          // Set after reading callback has been called
 int zb_network_status = 0;              // 0 for unjoined, 1 for joined, -1 for left
 uint8_t zb_unavailable_alarm_flag = 0;  // 0 if alarm has not been set, 1 if alarm is set
 
@@ -66,6 +71,7 @@ static void pir_sensor_update(void *arg) {
     uint8_t zb_occupancy;
     while (1) {
         if (xQueueReceive(gpio_isr_evt_queue, &io_num, portMAX_DELAY)) {    // True if item received from queue
+        //if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {    // If wakeup caused by GPIO
             zb_occupancy = gpio_get_level(io_num);
 
             // If Zigbee has started, update the attribute
@@ -76,8 +82,15 @@ static void pir_sensor_update(void *arg) {
                     ESP_ZB_ZCL_ATTR_OCCUPANCY_SENSING_OCCUPANCY_ID, &zb_occupancy, false);
                 esp_zb_lock_release();
             }
+
+            ESP_LOGI(TAG, "PIR sensor: %d", zb_occupancy);
         }
+        //ESP_LOGI(TAG, "Made it here (PIR loop)", zb_occupancy);
         vTaskDelay(pdMS_TO_TICKS(250));
+        // Enable the light sleep timer to wake up after 250ms
+        //esp_sleep_enable_timer_wakeup(250 * 1000);
+        //esp_light_sleep_start();
+        //esp_zb_scheduler_alarm()
     }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -172,6 +185,22 @@ void hdc1080_readings_callback(hdc1080_sensor_readings_t sens_readings) {
             ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID, &zb_humidity, false);
         esp_zb_lock_release();
     }
+
+    hdc1080_done_flag = 1;
+}
+///////////////////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////////////////
+// Configure ADC
+///////////////////////////////////////////////////////////////////////////////////////////
+static esp_err_t adc_init(void) {
+    ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&bat_adc_init_config, &bat_adc_handle), TAG, "Failed to create ADC handle");
+    ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(bat_adc_handle, BAT_ADC_CH, &bat_adc_config), TAG, "Failed to config ADC channel");
+
+    if (adc_calibration_init(BAT_ADC, BAT_ADC_CH, BAT_ADC_ATTEN, &bat_adc_cali_handle)!= true) {
+        return !ESP_OK;
+    }
+    return ESP_OK;
 }
 ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -184,9 +213,15 @@ static void update_all_sensors(void *arg) {
     while (1) {
         
         // Request readings from HDC1080
+        //hdc1080_done_flag = 0;
+        //i2c_init();
         if(hdc1080_request_readings() == ESP_OK){
             //ESP_LOGI("MAIN", "READINGS WERE REQUESTED");
+            while (hdc1080_done_flag != 1) {}   // Wait for HDC1080 to return before moving
         }
+
+        // Try initializing and deinitializing ADC before each sample (hoping to fix constant 4081 issue)
+        adc_init();
 
         // Read ADC
         if(adc_oneshot_read(bat_adc_handle, BAT_ADC_CH, &adc_raw) == ESP_OK) {
@@ -196,6 +231,9 @@ static void update_all_sensors(void *arg) {
         if (adc_cali_raw_to_voltage(bat_adc_cali_handle, adc_raw, &voltage) == ESP_OK) {
             ESP_LOGI("ADC", "ADC voltage: %d", voltage);
         }
+
+        adc_calibration_deinit(bat_adc_cali_handle);
+        adc_oneshot_del_unit(bat_adc_handle);
 
         zb_bat_voltage = (int16_t)voltage;
 
@@ -209,6 +247,9 @@ static void update_all_sensors(void *arg) {
         }
 
         vTaskDelay(pdMS_TO_TICKS(SENSOR_UPDATE_PERIOD_SEC * 1000));
+        // Enable the light sleep timer
+        //esp_sleep_enable_timer_wakeup(SENSOR_UPDATE_PERIOD_SEC * 1000 * 1000);
+        //esp_light_sleep_start();
     }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -253,38 +294,33 @@ static esp_err_t multisensor_init(void)
 // Configure GPIO
 ///////////////////////////////////////////////////////////////////////////////////////////
 static esp_err_t gpio_init(void) {  
-    gpio_config_t io_conf = {
+    gpio_config_t pir_io_conf = {
         .pin_bit_mask = (1ULL << PIR_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_ANYEDGE,
     };
-    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Failed to configure GPIO");
+    gpio_config_t led0_io_conf = {
+        .pin_bit_mask = (1ULL << LED0_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&pir_io_conf), TAG, "Failed to configure PIR GPIO");
+    ESP_RETURN_ON_ERROR(gpio_config(&led0_io_conf), TAG, "Failed to configure PIR GPIO");
+    ESP_RETURN_ON_ERROR(gpio_sleep_set_direction(PIR_GPIO, GPIO_MODE_INPUT), TAG, "Failed to set sleep direction of IO");
     ESP_RETURN_ON_ERROR(gpio_isr_handler_add(PIR_GPIO, gpio_isr_handler, (void*) PIR_GPIO), TAG, "Failed to initialize pin interrupt");
     gpio_isr_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     return (xTaskCreate(pir_sensor_update, "pir_update", 4096, NULL, 10, NULL) == pdTRUE) ? ESP_OK : ESP_FAIL;
 }
 ///////////////////////////////////////////////////////////////////////////////////////////
 
-///////////////////////////////////////////////////////////////////////////////////////////
-// Configure ADC
-///////////////////////////////////////////////////////////////////////////////////////////
-static esp_err_t adc_init(void) {
-    ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&bat_adc_init_config, &bat_adc_handle), TAG, "Failed to create ADC handle");
-    ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(bat_adc_handle, BAT_ADC_CH, &bat_adc_config), TAG, "Failed to config ADC channel");
-
-    if (adc_calibration_init(BAT_ADC, BAT_ADC_CH, BAT_ADC_ATTEN, &bat_adc_cali_handle)!= true) {
-        return !ESP_OK;
-    }
-    return ESP_OK;
-}
-///////////////////////////////////////////////////////////////////////////////////////////
-
 static esp_err_t init_all_drivers(void)
 {
     ESP_RETURN_ON_FALSE(switch_driver_init(button_func_pair, PAIR_SIZE(button_func_pair), esp_app_buttons_handler), ESP_FAIL, TAG, "Failed to initialize switch driver");
-    ESP_RETURN_ON_ERROR(adc_init(), TAG, "Failed to initialize ADC");
+    //ESP_RETURN_ON_ERROR(adc_init(), TAG, "Failed to initialize ADC");
     ESP_RETURN_ON_ERROR(gpio_init(), TAG, "Failed to set up GPIO and interrupt");
     ESP_RETURN_ON_ERROR(multisensor_init(), TAG, "Failed to initialize DHT driver");
     return ESP_OK;
@@ -358,6 +394,16 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             esp_zb_scheduler_alarm((esp_zb_callback_t)handle_zigbee_unavilable, 0, 60*1000);
         }
         break;
+    // Handle being able to sleep
+    case ESP_ZB_COMMON_SIGNAL_CAN_SLEEP:
+        ESP_LOGI(TAG, "Zigbee can sleep");
+        gpio_set_level(LED0_GPIO, 1);
+        //gpio_set_level(LED0_GPIO, !gpio_get_level(LED0_GPIO));
+        //gpio_hold_en(LED0_GPIO);
+        esp_zb_sleep_now();
+        gpio_set_level(LED0_GPIO, 0);
+        //gpio_hold_dis(LED0_GPIO);
+        break;
     default:
         ESP_LOGI(TAG, "ZDO signal: %s (0x%x), status: %s", esp_zb_zdo_signal_to_string(sig_type), sig_type,
                  esp_err_to_name(err_status));
@@ -413,6 +459,26 @@ esp_zb_ep_list_t *multisensor_ep_create(uint8_t endpoint_id, esp_zb_multisensor_
 }
 ///////////////////////////////////////////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////////////////////////////////////////
+// Configure some sleep stuff
+///////////////////////////////////////////////////////////////////////////////////////////
+static esp_err_t esp_zb_power_save_init(void)
+{
+    esp_err_t rc = ESP_OK;
+#ifdef CONFIG_PM_ENABLE
+    int cur_cpu_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = cur_cpu_freq_mhz,
+        .min_freq_mhz = cur_cpu_freq_mhz,
+#if CONFIG_FREERTOS_USE_TICKLESS_IDLE
+        .light_sleep_enable = true
+#endif
+    };
+    rc = esp_pm_configure(&pm_config);
+#endif
+    return rc;
+}
+///////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 // Zigbee task (called once, basically the setup)
@@ -421,6 +487,8 @@ void esp_zb_task(void *pvParameters)
 {
     // Initialize Zigbee stack
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZED_CONFIG();
+    esp_zb_sleep_enable(true);
+    esp_zb_sleep_set_threshold(5000);
     esp_zb_init(&zb_nwk_cfg);
 
     // Create customized temperature sensor endpoint
@@ -468,6 +536,10 @@ void app_main(void)
         .host_config = ESP_ZB_DEFAULT_HOST_CONFIG(),
     };
     ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_zb_power_save_init());
+    ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, GPIO_INTR_HIGH_LEVEL));
+    ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
+    ESP_ERROR_CHECK(esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_ON));
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
 
     // Initialize all drivers/peripherals

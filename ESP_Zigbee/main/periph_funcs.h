@@ -1,6 +1,6 @@
 #pragma once
-//#include "driver/i2c_master.h"
 #include "driver/i2c.h"
+//#include "driver/i2c.h"
 
 // I2C stuff for HDC1080
 #define I2C_SCL GPIO_NUM_11

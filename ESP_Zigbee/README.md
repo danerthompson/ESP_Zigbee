@@ -1,1 +1,2 @@
-Open source Zigbee multisensor code for ESP32 C6. More documentation coming soon!
+# ESP_Zigbee
+Open source firmware for ESP32-C6 Zigbee device
