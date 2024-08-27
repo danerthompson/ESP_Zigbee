@@ -1,0 +1,7 @@
+version: "0.0.1"
+license: "MIT"
+description: "HDC1080 component using i2c_master.h drivers"
+url: "https://github.com/danerthompson/esp-idf-hdc1080"
+dependencies:
+  idf:
+    version: ">5.0.0"

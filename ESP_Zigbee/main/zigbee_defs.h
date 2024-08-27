@@ -6,7 +6,7 @@
 /* Zigbee configuration */
 #define INSTALLCODE_POLICY_ENABLE       false                                   // enable the install code policy for security
 #define ED_AGING_TIMEOUT                ESP_ZB_ED_AGING_TIMEOUT_64MIN
-#define ED_KEEP_ALIVE                   3000                                    // 3000 millisecond
+#define ED_KEEP_ALIVE                   7500                                    // milliseconds
 #define HA_ESP_SENSOR_ENDPOINT          10                                      // esp sensor device endpoint
 #define ESP_ZB_PRIMARY_CHANNEL_MASK     ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK    // Zigbee primary channel mask use in the example
 
@@ -52,6 +52,7 @@ typedef struct esp_zb_multisensor_cfg_s {
     esp_zb_humidity_meas_cluster_cfg_t humidity_meas_cfg;
     esp_zb_illuminance_meas_cluster_cfg_t light_meas_cfg;
     esp_zb_occupancy_sensing_cluster_cfg_t pir_sens_cfg;
+    esp_zb_on_off_cluster_cfg_t pir_led_on_off_cfg;
     esp_zb_custom_electrical_meas_cluster_cfg_t electrical_meas_cfg;
 } esp_zb_multisensor_cfg_t;
 

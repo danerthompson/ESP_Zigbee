@@ -1,6 +1,5 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  grstat/hdc1080: "^0.2.2"
   espressif/esp-zboss-lib: "~1.4.0"
   espressif/esp-zigbee-lib: "~1.4.0"
   ## Required IDF version

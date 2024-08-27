@@ -3,3 +3,6 @@
 /.vscode
 /.devcontainer
 sdkconfig.old
+sdkconfig
+dependencies.lock
+partitions.csv
