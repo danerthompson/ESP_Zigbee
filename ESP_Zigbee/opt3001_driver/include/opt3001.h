@@ -10,7 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define OPT3001_I2C_TRANFER_TIMEOUT_MS 50       // Timeout for I2C bus when talking to HDC1080
+#define OPT3001_I2C_TRANFER_TIMEOUT_MS 100       // Timeout for I2C bus when talking to OPT3001
 
 #define OPT3001_CONFIG_AUTO_FULLSCALE_RANGE_MASK  0xC000             
 #define OPT3001_CONFIG_CONVERSION_TIME_100MS_MASK 0x0000

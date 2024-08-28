@@ -69,7 +69,7 @@ i2c_master_bus_config_t i2c_bus_config = {
     .scl_io_num = I2C_SCL,
     .sda_io_num = I2C_SDA,
     .glitch_ignore_cnt = 7,
-    .flags.enable_internal_pullup = false,
+    .flags.enable_internal_pullup = true,
 };
 i2c_master_bus_handle_t i2c_bus_handle;
 
@@ -93,8 +93,6 @@ i2c_device_config_t opt3001_dev_cfg = {
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-
-
 uint8_t zb_started_flag = 0;            // Flag is set after Zigbee stack is initialized
 uint8_t first_sensor_sample_flag = 0;   // Flag is set after first sensor sample occurs (stops Zigbee from reporting 0s on restart)
 uint8_t hdc1080_done_flag = 0;          // Set after reading callback has been called
@@ -130,13 +128,15 @@ void pir_sensor_update(void *arg) {
 
         // Change interrupt level
         ESP_ERROR_CHECK(gpio_set_intr_type(PIR_GPIO, PIR_interrupt_type));
-        //ESP_ERROR_CHECK(gpio_intr_enable(PIR_GPIO));
-        // Change wakeup level on GPIO
-        ESP_ERROR_CHECK(gpio_wakeup_disable(PIR_GPIO));
-        ESP_ERROR_CHECK(esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO));
-        ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, PIR_interrupt_type));   
-        ESP_ERROR_CHECK(gpio_wakeup_enable(BUTT0_GPIO, BUTT0_interrupt_type));    // Make sure BUTT0 wakeup stays enabled
-        ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
+        // Change wakeup level on GPIO (also changes the button wakeup level, but this isn't as critical as PIR)
+        // If looking for LOW wakeup, add BUTT0 to wakeup, if HIGH, don't include BUTT0
+        ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup((1ULL << PIR_GPIO) | ((zb_occupancy? 1ULL : 0) << BUTT0_GPIO), zb_occupancy? ESP_EXT1_WAKEUP_ANY_LOW : ESP_EXT1_WAKEUP_ANY_HIGH));
+
+        //ESP_ERROR_CHECK(gpio_wakeup_disable(PIR_GPIO));
+        //ESP_ERROR_CHECK(esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO));
+        //ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, PIR_interrupt_type));   
+        //ESP_ERROR_CHECK(gpio_wakeup_enable(BUTT0_GPIO, BUTT0_interrupt_type));    // Make sure BUTT0 wakeup stays enabled
+        //ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
 
         // If Zigbee has started, update the attribute
         if (zb_started_flag == 1) {
@@ -175,9 +175,9 @@ static void long_press_timer_callback(uint8_t input) {
     long_press_alarm_scheduled = 0;
     // If button is still pressed
     if (gpio_get_level(BUTT0_GPIO) == 0) {
-        i2c_master_bus_rm_device(hdc1080_dev_handle);  // Should be redundant if deleting the bus
-        i2c_master_bus_rm_device(opt3001_dev_handle);  // Should be redundant if deleting the bus
-        i2c_del_master_bus(i2c_bus_handle);
+        //i2c_master_bus_rm_device(hdc1080_dev_handle);  // Should be redundant if deleting the bus
+        //i2c_master_bus_rm_device(opt3001_dev_handle);  // Should be redundant if deleting the bus
+        //i2c_del_master_bus(i2c_bus_handle);
         gpio_uninstall_isr_service();
         gpio_hold_dis(LED0_GPIO);
         gpio_hold_dis(LED1_GPIO);
@@ -229,11 +229,15 @@ void button_handler(void *arg) {
 
                     // Cancel current alarm
                     if (led_turnoff_alarm_scheduled) {
+                        esp_zb_lock_acquire(portMAX_DELAY);
                         esp_zb_scheduler_alarm_cancel((esp_zb_callback_t)led_turnoff_timer_callback, 0);
+                        esp_zb_lock_release();
                         led_turnoff_alarm_scheduled = 0;
                     }
                     // Begin timer to turn off LEDs
+                    esp_zb_lock_acquire(portMAX_DELAY);
                     esp_zb_scheduler_alarm((esp_zb_callback_t)led_turnoff_timer_callback, 0, LED_TURNOFF_TIMEOUT_MS);
+                    esp_zb_lock_release();
                     led_turnoff_alarm_scheduled = 1;
                     
                 }
@@ -247,7 +251,9 @@ void button_handler(void *arg) {
 
                     // Cancel current alarm
                     if (led_turnoff_alarm_scheduled) {
+                        esp_zb_lock_acquire(portMAX_DELAY);
                         esp_zb_scheduler_alarm_cancel((esp_zb_callback_t)led_turnoff_timer_callback, 0);
+                        esp_zb_lock_release();
                         led_turnoff_alarm_scheduled = 0;
                     }
 
@@ -259,11 +265,11 @@ void button_handler(void *arg) {
         // Change interrupt level
         ESP_ERROR_CHECK(gpio_set_intr_type(BUTT0_GPIO, BUTT0_interrupt_type));
         // Change wakeup level on GPIO
-        ESP_ERROR_CHECK(gpio_wakeup_disable(BUTT0_GPIO));
-        ESP_ERROR_CHECK(esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO));
-        ESP_ERROR_CHECK(gpio_wakeup_enable(BUTT0_GPIO, BUTT0_interrupt_type));   
-        ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, PIR_interrupt_type));  // Make sure PIR wakeup stays enabled
-        ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
+        //ESP_ERROR_CHECK(gpio_wakeup_disable(BUTT0_GPIO));
+        //ESP_ERROR_CHECK(esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO));
+        //ESP_ERROR_CHECK(gpio_wakeup_enable(BUTT0_GPIO, BUTT0_interrupt_type));   
+        //ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, PIR_interrupt_type));  // Make sure PIR wakeup stays enabled
+        //ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
 
         ESP_LOGI(TAG, "Button %s", button_level? "released" : "pressed");
         vTaskSuspend(NULL);
@@ -302,9 +308,9 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
 // Function to deinit peripherals (they aren't reset on software restart) and reset ESP
 ///////////////////////////////////////////////////////////////////////////////////////////
 static void deinit_and_restart() {
-    i2c_master_bus_rm_device(hdc1080_dev_handle);  // Should be redundant if deleting the bus
-    i2c_master_bus_rm_device(opt3001_dev_handle);  // Should be redundant if deleting the bus
-    i2c_del_master_bus(i2c_bus_handle);
+    //i2c_master_bus_rm_device(hdc1080_dev_handle);  // Should be redundant if deleting the bus
+    //i2c_master_bus_rm_device(opt3001_dev_handle);  // Should be redundant if deleting the bus
+    //i2c_del_master_bus(i2c_bus_handle);
     //adc_calibration_deinit(bat_adc_cali_handle);
     //adc_oneshot_del_unit(bat_adc_handle);
     gpio_uninstall_isr_service();
@@ -361,8 +367,37 @@ static void update_all_sensors(void *arg) {
     float temperature, humidity, lux;
 
     while (1) {
+
+        // Acquire lock to make sure Zigbee stuff isn't called during
+        if (zb_started_flag == 1) {
+            esp_zb_lock_acquire(portMAX_DELAY);
+        }
+
+        // Lock power management to stop light sleep from occurring during delay
+        esp_pm_lock_handle_t pm_lock;
+        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "no_light_sleep", &pm_lock);
+        esp_pm_lock_acquire(pm_lock);
+
+        // Reset I2C bus pins
+        gpio_reset_pin(I2C_SCL);
+        gpio_reset_pin(I2C_SDA);
+
+        // Initialize I2C bus
+        i2c_new_master_bus(&i2c_bus_config, &i2c_bus_handle);
+
+        // Add HDC1080 to I2C bus driver
+        i2c_master_bus_add_device(i2c_bus_handle, &hdc1080_dev_cfg, &hdc1080_dev_handle);
+        hdc1080_settings.device_handle = hdc1080_dev_handle;    // Update device handle
+        hdc1080_settings.configuration = HDC1080_CONFIG_TEMP_14BIT_RES_MASK | HDC1080_CONFIG_HUMIDITY_14BIT_RES_MASK | 
+                                         HDC1080_CONFIG_HEATER_DISABLE_MASK | HDC1080_CONFIG_TEMP_AND_HUMIDITY_MODE_MASK;
+        // Add OPT3001 to I2C bus driver
+        i2c_master_bus_add_device(i2c_bus_handle, &opt3001_dev_cfg, &opt3001_dev_handle);
+        opt3001_settings.device_handle = opt3001_dev_handle;    // Update device handle
+        opt3001_settings.configuration = OPT3001_CONFIG_AUTO_FULLSCALE_RANGE_MASK | OPT3001_CONFIG_CONVERSION_TIME_100MS_MASK | 
+                                         OPT3001_CONFIG_CONV_MODE_SINGLESHOT_MASK | OPT3001_CONFIG_LATCH_LATCHED_MASK;
         
         // Read HDC1080
+        HDC1080_Write_Configuration(&hdc1080_settings); // Don't actually have to do this every time, but it shouldn't hurt
         if (HDC1080_Read_Vals(&hdc1080_settings, &temperature, &humidity) == ESP_OK) {
 
             zb_temperature = (int16_t) ((temperature+0.005)*100.0);   // Add 0.005 to do rounding instead of truncating
@@ -371,19 +406,15 @@ static void update_all_sensors(void *arg) {
             ESP_LOGI("SENSOR_DATA", "TEMPERATURE: %.2f°C", temperature);
             ESP_LOGI("SENSOR_DATA", "HUMIDITY: %.2f%%", humidity);
 
-            // If Zigbee has started, update attributes
+            // If Zigbee stack has been started, update attributes
             if (zb_started_flag == 1) {
-                esp_zb_lock_acquire(portMAX_DELAY);
                 esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
                     ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                     ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID, &zb_temperature, false);
-                esp_zb_lock_release();
 
-                esp_zb_lock_acquire(portMAX_DELAY);
                 esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
                     ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                     ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID, &zb_humidity, false);
-                esp_zb_lock_release();
             }
         }
         else {
@@ -392,6 +423,8 @@ static void update_all_sensors(void *arg) {
 
         // Read OPT3001
         OPT3001_Write_Configuration(&opt3001_settings); // Must write configuration to trigger single shot conversion
+        // Wait for conversion to finish
+        vTaskDelay(pdMS_TO_TICKS(opt3001_settings.configuration & OPT3001_CONFIG_CONVERSION_TIME_800MS_MASK? 1000 : 200));
         if (OPT3001_Read_Lux(&opt3001_settings, &lux) == ESP_OK) {
 
             ESP_LOGI("SENSOR_DATA", "LUX: %.2f", lux);
@@ -403,18 +436,21 @@ static void update_all_sensors(void *arg) {
                 zb_illuminance = (uint16_t) (10000.0 * log10f(lux)) + 1;
             }
 
-            // If Zigbee has started, update attributes
+            // If Zigbee stack has been started, update attribute
             if (zb_started_flag == 1) {
-                esp_zb_lock_acquire(portMAX_DELAY);
                 esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
                     ESP_ZB_ZCL_CLUSTER_ID_ILLUMINANCE_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                     ESP_ZB_ZCL_ATTR_ILLUMINANCE_MEASUREMENT_MEASURED_VALUE_ID, &zb_illuminance, false);
-                esp_zb_lock_release();
-            }
+            }           
         }
         else {
             ESP_LOGE(TAG, "Error reading OPT3001");
         }
+
+        // Delete I2C bus and reset pins
+        ESP_ERROR_CHECK(i2c_del_master_bus(i2c_bus_handle));
+        gpio_reset_pin(I2C_SCL);
+        gpio_reset_pin(I2C_SDA);
 
         // Enable voltage divider
         gpio_set_direction(BAT_ADC_EN_GPIO, GPIO_MODE_OUTPUT);
@@ -430,6 +466,12 @@ static void update_all_sensors(void *arg) {
         }
         if (adc_cali_raw_to_voltage(bat_adc_cali_handle, adc_raw, &voltage) == ESP_OK) {
             ESP_LOGI("ADC", "ADC voltage: %d", voltage);
+        }
+
+        // Release power management
+        esp_pm_lock_release(pm_lock);
+        if (zb_started_flag == 1) {
+            esp_zb_lock_release();
         }
 
         // Disable voltage divider pin
@@ -448,7 +490,7 @@ static void update_all_sensors(void *arg) {
                 CUSTOM_ELECTRICAL_CLUSTER_BATTERY_ATTR_ID, &zb_bat_voltage, false);
             esp_zb_lock_release();
         }
-
+        
         // Set flag first time this is sampled
         if (first_sensor_sample_flag == 0) {
             first_sensor_sample_flag = 1;
@@ -464,8 +506,20 @@ static void update_all_sensors(void *arg) {
 ///////////////////////////////////////////////////////////////////////////////////////////
 static esp_err_t multisensor_init(void)
 {
+    /*
+    gpio_reset_pin(I2C_SCL);
+    gpio_reset_pin(I2C_SDA);
+
+    //i2c_master_bus_rm_device(hdc1080_dev_handle);  // Should be redundant if deleting the bus
+    //i2c_master_bus_rm_device(opt3001_dev_handle);  // Should be redundant if deleting the bus
+    //i2c_del_master_bus(i2c_bus_handle);
+
+
     // Initialize I2C bus
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &i2c_bus_handle));
+    
+    // Reset bus to avoid errors
+    //ESP_ERROR_CHECK(i2c_master_bus_reset(i2c_bus_handle));
         
     // Add HDC1080 to I2C bus driver
     ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus_handle, &hdc1080_dev_cfg, &hdc1080_dev_handle));
@@ -488,8 +542,16 @@ static esp_err_t multisensor_init(void)
         
     // Config OPT3001
     ESP_ERROR_CHECK(OPT3001_Write_Configuration(&opt3001_settings));
+
+    // Disable I2C bus (needed for light sleep)
+    //ESP_ERROR_CHECK(i2c_master_bus_rm_device(hdc1080_dev_handle));  // Should be redundant if deleting the bus
+    //ESP_ERROR_CHECK(i2c_master_bus_rm_device(opt3001_dev_handle));  // Should be redundant if deleting the bus
+    ESP_ERROR_CHECK(i2c_del_master_bus(i2c_bus_handle));
+    gpio_reset_pin(I2C_SCL);
+    gpio_reset_pin(I2C_SDA);
+    */
     
-    return (xTaskCreate(update_all_sensors, "update_all_sensors", 4096, NULL, 10, NULL) == pdTRUE) ? ESP_OK : ESP_FAIL;
+    return (xTaskCreate(update_all_sensors, "update_all_sensors", 8192, NULL, 10, NULL) == pdTRUE) ? ESP_OK : ESP_FAIL;
 }
 ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -546,23 +608,26 @@ static esp_err_t gpio_init(void) {
     ESP_RETURN_ON_ERROR(gpio_config(&ledp_io_conf), TAG, "Failed to configure PIR LED GPIO");
     ESP_RETURN_ON_ERROR(gpio_config(&bat_adc_en_io_conf), TAG, "Failed to configure BAT ADC enable GPIO");
     ESP_RETURN_ON_ERROR(gpio_config(&butt0_io_conf), TAG, "Failed to configure BUTT0 GPIO");
-    ESP_RETURN_ON_ERROR(gpio_sleep_set_direction(PIR_GPIO, GPIO_MODE_INPUT), TAG, "Failed to set sleep direction of PIR IO");
+    //ESP_RETURN_ON_ERROR(gpio_sleep_set_direction(PIR_GPIO, GPIO_MODE_INPUT), TAG, "Failed to set sleep direction of PIR IO");
     //ESP_RETURN_ON_ERROR(gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT), TAG, "Failed to install GPIO ISR service");
     // Do this to avoid race conditions on boot from PIR GPIO
-    PIR_interrupt_type = gpio_get_level(PIR_GPIO)? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL;
+    uint8_t pir_level = gpio_get_level(PIR_GPIO);
+    PIR_interrupt_type = pir_level? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL;
     ESP_RETURN_ON_ERROR(gpio_set_intr_type(PIR_GPIO, PIR_interrupt_type), TAG, "Failed to set PIR interrupt type");
     ESP_RETURN_ON_ERROR(gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT), TAG, "Failed to install ISR service");
     ESP_RETURN_ON_ERROR(gpio_isr_handler_add(PIR_GPIO, gpio_isr_handler, (void*) PIR_GPIO), TAG, "Failed to initialize PIR pin interrupt");
-    ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, PIR_interrupt_type));    
+    //ESP_ERROR_CHECK(gpio_wakeup_enable(PIR_GPIO, PIR_interrupt_type));    
 
-    ESP_RETURN_ON_ERROR(gpio_sleep_set_direction(BUTT0_GPIO, GPIO_MODE_INPUT), TAG, "Failed to set sleep direction of BUTT0 IO");
+    //ESP_RETURN_ON_ERROR(gpio_sleep_set_direction(BUTT0_GPIO, GPIO_MODE_INPUT), TAG, "Failed to set sleep direction of BUTT0 IO");
     // Do this to avoid race conditions on boot from BUTT0 GPIO
     BUTT0_interrupt_type = gpio_get_level(BUTT0_GPIO)? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL;
     ESP_RETURN_ON_ERROR(gpio_set_intr_type(BUTT0_GPIO, BUTT0_interrupt_type), TAG, "Failed to set BUTT0 interrupt type");
     ESP_RETURN_ON_ERROR(gpio_isr_handler_add(BUTT0_GPIO, gpio_isr_handler, (void*) BUTT0_GPIO), TAG, "Failed to initialize BUTT0 pin interrupt");
-    ESP_ERROR_CHECK(gpio_wakeup_enable(BUTT0_GPIO, BUTT0_interrupt_type));    
+    //ESP_ERROR_CHECK(gpio_wakeup_enable(BUTT0_GPIO, BUTT0_interrupt_type));    
 
-    ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
+    //ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
+    // If looking for LOW wakeup, add BUTT0 to wakeup, if HIGH, don't include BUTT0
+    ESP_RETURN_ON_ERROR(esp_sleep_enable_ext1_wakeup((1ULL << PIR_GPIO) | ((pir_level? 1ULL : 0) << BUTT0_GPIO), pir_level? ESP_EXT1_WAKEUP_ANY_LOW : ESP_EXT1_WAKEUP_ANY_HIGH), TAG, "Failed to enable EXT1 wakeup");
     gpio_isr_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     esp_err_t return_err = (xTaskCreate(button_handler, "button_handler", 4096, NULL, 10, &button_handler_handle) == pdTRUE) ? ESP_OK : ESP_FAIL;
     vTaskSuspend(button_handler_handle);  // Suspend the task initially
@@ -918,7 +983,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_zb_power_save_init());
     
-    ESP_ERROR_CHECK(esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_ON));
+    //ESP_ERROR_CHECK(esp_sleep_pd_config(ESP_PD_DOMAIN_TOP, ESP_PD_OPTION_ON));
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
 
     // Initialize all drivers/peripherals

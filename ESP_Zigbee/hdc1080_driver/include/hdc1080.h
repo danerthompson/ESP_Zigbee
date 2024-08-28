@@ -10,8 +10,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define HDC1080_CONVERSION_DELAY_MS 50          // 50 ms delay between requesting sensor readings and actually reading them
-#define HDC1080_I2C_TRANFER_TIMEOUT_MS 50       // Timeout for I2C bus when talking to HDC1080
+#define HDC1080_CONVERSION_DELAY_MS 50           // 50 ms delay between requesting sensor readings and actually reading them
+#define HDC1080_I2C_TRANFER_TIMEOUT_MS 100       // Timeout for I2C bus when talking to HDC1080
 
 #define HDC1080_CONFIG_TEMP_14BIT_RES_MASK          0x0000
 #define HDC1080_CONFIG_TEMP_11BIT_RES_MASK          0x0400

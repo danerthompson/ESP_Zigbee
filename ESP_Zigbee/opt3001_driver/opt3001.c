@@ -19,7 +19,7 @@ esp_err_t OPT3001_Read_Lux(opt3001_settings_t *opt3001_settings, float* lux) {
     uint8_t buf_to_send = OPT3001_RESULT_REG_ADDR;
     if (i2c_master_transmit(opt3001_settings->device_handle, &buf_to_send, sizeof(buf_to_send), OPT3001_I2C_TRANFER_TIMEOUT_MS) == ESP_OK) {
         ESP_LOGD(TAG, "Sent read request");
-        vTaskDelay(pdMS_TO_TICKS(opt3001_settings->configuration & OPT3001_CONFIG_CONVERSION_TIME_800MS_MASK? 1000 : 200));
+        vTaskDelay(pdMS_TO_TICKS(OPT3001_I2C_TRANFER_TIMEOUT_MS));
         uint8_t read_buf[2] = {0};
         if (i2c_master_receive(opt3001_settings->device_handle, read_buf, sizeof(read_buf), OPT3001_I2C_TRANFER_TIMEOUT_MS) == ESP_OK) {
             // Compute lux based on the datasheet
