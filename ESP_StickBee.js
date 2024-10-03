@@ -54,10 +54,10 @@ const fLocal = {
 const { identify, temperature, humidity, illuminance, occupancy, onOff } = require('zigbee-herdsman-converters/lib/modernExtend');
 
 const definition = {
-  zigbeeModel: ['ESP_StickBee'],
-  model: 'ESP_StickBee',
+  zigbeeModel: ['ESP_Stickbee'],
+  model: 'ESP_Stickbee',
   vendor: 'Stickman Solutions LLC',
-  description: 'Custom definition for ESP_StickBee',
+  description: 'Custom definition for ESP_Stickbee',
 
   // These settings define the clusters used
   extend: [identify(), temperature(), humidity(), illuminance(), occupancy(), onOff(),

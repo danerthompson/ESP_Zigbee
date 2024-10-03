@@ -17,6 +17,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////
 // Constant definitions (including pin numbers)
 ///////////////////////////////////////////////////////////////////////////////////////////
+#define MAJOR_SOFTWARE_VER 0
+#define MINOR_SOFTWARE_VER 1
+
 #define PIR_GPIO GPIO_NUM_3
 #define LEDP_GPIO GPIO_NUM_23
 #define LED0_GPIO GPIO_NUM_21
@@ -39,11 +42,11 @@
 // ADC configuration
 #define BAT_ADC         ADC_UNIT_1
 #define BAT_ADC_CH      ADC_CHANNEL_2   // GPIO 2
-#define BAT_ADC_ATTEN   ADC_ATTEN_DB_12
+#define BAT_ADC_ATTEN   ADC_ATTEN_DB_0  // No attenuation needed if using AA battery and 1/2 voltage divider
 
 #define ESP_INTR_FLAG_DEFAULT 0
 #define LONG_PRESS_TIME_MS 1000
-#define LED_TURNOFF_TIMEOUT_MS 10000
+#define LED_TURNOFF_TIMEOUT_MS 30000
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -93,11 +96,14 @@ i2c_device_config_t opt3001_dev_cfg = {
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////
+// Zigbee variables
+///////////////////////////////////////////////////////////////////////////////////////////
 uint8_t zb_started_flag = 0;            // Flag is set after Zigbee stack is initialized
 uint8_t first_sensor_sample_flag = 0;   // Flag is set after first sensor sample occurs (stops Zigbee from reporting 0s on restart)
 uint8_t hdc1080_done_flag = 0;          // Set after reading callback has been called
 int zb_network_status = 0;              // 0 for unjoined, 1 for joined, -1 for left
 uint8_t zb_unavailable_alarm_flag = 0;  // 0 if alarm has not been set, 1 if alarm is set
+uint8_t zb_steering_alarm_flag = 0;     // 0 if alarm has not been set, 1 if alarm is set
 
 int16_t zb_bat_voltage, zb_temperature;
 uint16_t zb_humidity, zb_illuminance;
@@ -108,6 +114,7 @@ uint8_t PIR_interrupt_type, BUTT0_interrupt_type;
 uint8_t leds_enabled = 0;       // When set, allow network LED to turn on
 uint8_t long_press_alarm_scheduled = 0;
 uint8_t led_turnoff_alarm_scheduled = 0;
+///////////////////////////////////////////////////////////////////////////////////////////
 
 #if !defined ZB_ED_ROLE
 #error Define ZB_ED_ROLE in idf.py menuconfig to compile sensor (End Device) source code.
@@ -367,6 +374,8 @@ static void update_all_sensors(void *arg) {
     float temperature, humidity, lux;
 
     while (1) {
+
+        ESP_LOGI(TAG, "UPDATE ALL SENSORS:");
 
         // Acquire lock to make sure Zigbee stuff isn't called during
         if (zb_started_flag == 1) {
@@ -675,10 +684,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         } else {
             /* commissioning failed */
             ESP_LOGW(TAG, "Failed to initialize Zigbee stack (status: %s)", esp_err_to_name(err_status));
+            // This is caused when the parent node can't be found. Keep resetting until parent node is found: https://github.com/espressif/esp-zigbee-sdk/issues/169#issuecomment-1849540638
             deinit_and_restart();
         }
         break;
     case ESP_ZB_BDB_SIGNAL_STEERING:
+        zb_steering_alarm_flag = 0;
         if (err_status == ESP_OK) {
             zb_network_status = 1;
             esp_zb_ieee_addr_t extended_pan_id;
@@ -703,9 +714,19 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Leave signal received (REJOIN)");
         }
         ESP_LOGI(TAG, "Restarting network steering");
-        //esp_zb_factory_reset();
-        deinit_and_restart();
-        //bdb_start_top_level_commissioning_cb(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+
+        zb_network_status = 0;
+
+        // Restart commissioning to rejoin a network
+        esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb, ESP_ZB_BDB_MODE_NETWORK_STEERING, 1000);
+
+        // Set alarm to handle if network isn't rejoined
+        if (zb_unavailable_alarm_flag == 0) {
+            zb_unavailable_alarm_flag = 1;
+            ESP_LOGI(TAG, "Zigbee unavailable alarm set");
+            esp_zb_scheduler_alarm((esp_zb_callback_t)handle_zigbee_unavilable, 0, 60*1000);
+        }
+        //deinit_and_restart();
         break;
     // Handle unavailable signal
     case ESP_ZB_ZDO_DEVICE_UNAVAILABLE:
@@ -985,6 +1006,9 @@ void app_main(void)
     
     //ESP_ERROR_CHECK(esp_sleep_pd_config(ESP_PD_DOMAIN_TOP, ESP_PD_OPTION_ON));
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
+
+    // Report software version
+    ESP_LOGI(TAG, "ESP_STICKBEE SOFTWARE VERSION: %d.%d", MAJOR_SOFTWARE_VER, MINOR_SOFTWARE_VER);
 
     // Initialize all drivers/peripherals
     ESP_LOGI(TAG, "All driver initialization %s", init_all_drivers() ? "failed" : "successful");

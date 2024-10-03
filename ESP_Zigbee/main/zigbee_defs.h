@@ -15,7 +15,7 @@
  * The string should be started with the length of its own.
  */
 #define MANUFACTURER_NAME               "\x16""Stickman Solutions LLC"
-#define MODEL_IDENTIFIER                "\x0C""ESP_StickBee"
+#define MODEL_IDENTIFIER                "\x0C""ESP_Stickbee"
 
 #define ESP_ZB_ZED_CONFIG()                                         \
     {                                                               \
